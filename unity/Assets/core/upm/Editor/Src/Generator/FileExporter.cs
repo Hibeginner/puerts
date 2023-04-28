@@ -165,7 +165,7 @@ namespace Puerts.Editor
 #endif";
             }
 
-#if UNITY_ANDROID || UNITY_IPHONE
+#if UNITY_IPHONE
             if (false)
 #endif
             {
