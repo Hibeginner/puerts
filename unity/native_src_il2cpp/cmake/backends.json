@@ -216,6 +216,11 @@
                         "/Lib/macOS_arm64/libwee8.a"
                     ]
                 },
+                "android": {
+                    "armv7": ["/Lib/Android/armeabi-v7a/libwee8.a"],
+                    "arm64": ["/Lib/Android/arm64-v8a/libwee8.a"],
+                    "x64": ["/Lib/Android/x64/libwee8.a"]
+                },
                 "linux": {
                     "x64": [
                         "/Lib/Linux/libwee8.a"
@@ -225,13 +230,10 @@
             "copy-libraries": {
                 "android": {
                     "armv7": [
-                        "/Lib/Android/armeabi-v7a/libwee8.a"
                     ],
                     "arm64": [
-                        "/Lib/Android/arm64-v8a/libwee8.a"
                     ],
                     "x64": [
-                        "/Lib/Android/x64/libwee8.a"
                     ]
                 },
                 "ios": {
