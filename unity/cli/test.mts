@@ -10,16 +10,17 @@ function collectCSFilesAndMakeCompileConfig(dir: string, workdir: string, exclud
 
     const definitions = `
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-        <DefineConstants>PUER_CONSOLE_TEST;PUERTS_GENERAL;DISABLE_AUTO_REGISTER;TRACE;DEBUG;NETSTANDARD;NETSTANDARD2_1;</DefineConstants>
+        <DefineConstants>${process.platform == 'win32' ? 'PLATFORM_WINDOWS': 'PLATFORM_MAC'};PUER_CONSOLE_TEST;PUERTS_GENERAL;DISABLE_AUTO_REGISTER;PUERTS_REFLECT_ALL_EXTENSION;TRACE;DEBUG;NETSTANDARD;NETSTANDARD2_1;</DefineConstants>
         <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+        <WarningLevel>0</WarningLevel>
     </PropertyGroup>
     `
     const linkPuerTS = `
     <ItemGroup>
-        ${glob.sync(join(dir, '../packages/core/upm/**/*.cs').replace(/\\/g, '/'))
+        ${glob.sync(join(dir, '../../Assets/core/upm/**/*.cs').replace(/\\/g, '/'))
             .map(pathname =>
 `    <Compile Include="${relative(workdir, pathname).replace(/\//, '\\')}">
-            <Link>${relative(join(dir, '../packages/core/upm/'), pathname).replace(/\//, '\\')}</Link>
+            <Link>${relative(join(dir, '../../Assets/core/upm/'), pathname).replace(/\//, '\\')}</Link>
         </Compile>`
             ).join('\n')}
     </ItemGroup>
@@ -27,25 +28,38 @@ function collectCSFilesAndMakeCompileConfig(dir: string, workdir: string, exclud
     
     const linkUnitTests = `
     <ItemGroup>
-        ${glob.sync(join(dir, './Src/**/*.cs').replace(/\\/g, '/'))
-            .filter(pathname => !excludeGenerator || pathname.indexOf('WrapperGenerator') == -1)
+        ${glob.sync(join(dir, '../Src/Cases/**/*.cs').replace(/\\/g, '/'))
             .map(pathname =>
 `    <Compile Include="${relative(workdir, pathname).replace(/\//, '\\')}">
-            <Link>${relative(join(dir, './Src'), pathname).replace(/\//, '\\')}</Link>
+            <Link>${relative(join(dir, '../Src/Cases'), pathname).replace(/\//, '\\')}</Link>
         </Compile>`
             ).join('\n')
         }
     </ItemGroup>
     `
-    return [definitions, linkPuerTS, linkUnitTests].join('\n');
+
+    const linkGenerators = `
+    <ItemGroup>
+        ${glob.sync(join(dir, './Src/**/*.cs').replace(/\\/g, '/'))
+            .filter(pathname => excludeGenerator ? pathname.indexOf('WrapperGenerator') == -1 : true)
+            .map(pathname =>
+`    <Compile Include="${relative(workdir, pathname).replace(/\//, '\\')}">
+            <Link>${relative(join(dir, './Src/'), pathname).replace(/\//, '\\')}</Link>
+        </Compile>`
+            ).join('\n')
+        }
+    </ItemGroup>
+    `
+    return [definitions, linkPuerTS, linkUnitTests, linkGenerators].join('\n');
 }
 
-export async function dotnetTest(cwd: string, backend: string) {
+async function runTest(cwd: string, copyConfig: any, runInReflection: boolean, filter: string = '') {
     if (!existsSync(`${cwd}/Src/Helloworld.cs`)) {
         console.error("[Puer] Cannot find UnitTest Src");
         process.exit();
     }
-    const workdir = join(cwd, "vsauto");
+    const testProjectName = "vsauto-" + (runInReflection ? 'reflect' : 'static');
+    const workdir = join(cwd, testProjectName);
 
     rm("-rf", workdir);
     rm("-rf", join(cwd, 'Src/StaticWrapper'));
@@ -56,39 +70,53 @@ export async function dotnetTest(cwd: string, backend: string) {
     rm('-rf', join(workdir, 'Usings.cs'));
     
     const originProjectConfig = readFileSync(
-        join(workdir, 'vsauto.csproj'), 'utf-8'
+        join(workdir, `${testProjectName}.csproj`), 'utf-8'
     );
-    // 生成
-    writeFileSync(
-        join(workdir, 'vsauto.csproj'),
-        originProjectConfig.replace('</Project>', [collectCSFilesAndMakeCompileConfig(cwd, workdir, false), '</Project>'].join('\n'))
-    );
-    assert.equal(0, exec(`dotnet build vsauto.csproj -p:StartupObject=PuerGen -v quiet`, { cwd: workdir }).code)
+
+    const binPath = join(workdir, './bin/Debug');
+    mkdir("-p", binPath);
+    copyConfig.forEach((fileToCopy: string)=> {
+        const ext = extname(fileToCopy)
+        cp(fileToCopy, binPath + (ext == '.bundle' ? `/lib${basename(fileToCopy, ext)}.dylib`: ''));
+    })
+
+    if (!runInReflection) {
+        // 生成project 用于跑wrapper
+        writeFileSync(
+            join(workdir, `${testProjectName}.csproj`),
+            originProjectConfig.replace('</Project>', [collectCSFilesAndMakeCompileConfig(cwd, workdir, false), '</Project>'].join('\n'))
+        );
+
+        assert.equal(0, exec(`dotnet build ${testProjectName}.csproj -p:StartupObject=PuerGen -v quiet`, { cwd: workdir }).code)
     
-    const copyConfig = await runPuertsMake(join(cwd, '../native_src'), {
+        // 运行generate
+        mkdir('-p', join(cwd, "Src/StaticWrapper"));
+        assert.equal(0, exec(`dotnet run --project ${testProjectName}.csproj`, { cwd: workdir }).code)
+
+    }
+
+    // 生成csproj
+    writeFileSync(
+        join(workdir, `${testProjectName}.csproj`),
+        originProjectConfig.replace('</Project>', [collectCSFilesAndMakeCompileConfig(cwd, workdir, !runInReflection), '</Project>'].join('\n'))
+    );
+
+    // 运行测试
+    assert.equal(0, exec(`dotnet build ${testProjectName}.csproj -p:StartupObject=PuertsTest -v quiet`, { cwd: workdir }).code)
+    assert.equal(0, exec(`dotnet test ${testProjectName}.csproj --blame-hang-timeout 5000ms ${filter ? `--filter ${filter}` : ''}`, { cwd: workdir }).code)
+}
+
+export async function dotnetTest(cwd: string, backend: string, filter: string = '') {
+    // 编译binary
+    const copyConfig = await runPuertsMake(join(cwd, '../../native_src'), {
         platform: process.platform == 'win32' ? 'win' : 'osx',
         config: "Debug",
         backend: backend,
         arch: process.arch as any
     })
 
-    const binPath = join(workdir, './bin/Debug');
-    copyConfig.forEach((fileToCopy: string)=> {
-        const ext = extname(fileToCopy)
-        cp(fileToCopy, binPath + (ext == '.bundle' ? `/lib${basename(fileToCopy, ext)}.dylib`: ''));
-    })
-
-    // 运行generate
-    mkdir('-p', join(cwd, "Src/StaticWrapper"));
-    assert.equal(0, exec(`dotnet run --project vsauto.csproj`, { cwd: workdir }).code)
-
-    // 带上wrapper重新生成csproj并运行测试
-    writeFileSync(
-        join(workdir, 'vsauto.csproj'),
-        originProjectConfig.replace('</Project>', [collectCSFilesAndMakeCompileConfig(cwd, workdir, true), '</Project>'].join('\n'))
-    );
-    assert.equal(0, exec(`dotnet build vsauto.csproj -p:StartupObject=PuertsTest -v quiet`, { cwd: workdir }).code)
-    assert.equal(0, exec(`dotnet test vsauto.csproj`, { cwd: workdir }).code)
+    // await runTest(cwd, copyConfig, true, filter);
+    await runTest(cwd, copyConfig, false, filter);
 }
 
 
