@@ -205,14 +205,6 @@ namespace Puerts.Editor
                 }
                 
                 var RegisterInfos = RegisterInfoGenerator.GetRegisterInfos(genTypes);
-				List<RegisterInfoForGenerate> notNullRegisterInfos = new List<RegisterInfoForGenerate>();
-                foreach(var infos in notNullRegisterInfos)
-                {
-                    if(null != infos)
-                    {
-                        notNullRegisterInfos.Add(infos);
-                    }
-                }
 
                 if (loader == null)
                 {
@@ -221,7 +213,7 @@ namespace Puerts.Editor
                 using (var jsEnv = new JsEnv(loader))
                 {
                     var registerInfoRender = jsEnv.ExecuteModule<Func<List<RegisterInfoForGenerate>, string>>("puerts/templates/registerinfo.tpl.mjs", "default");
-                    string registerInfoContent = registerInfoRender(notNullRegisterInfos);
+                    string registerInfoContent = registerInfoRender(RegisterInfos);
                     var registerInfoPath = outDir + "RegisterInfo_Gen.cs";
                     using (StreamWriter textWriter = new StreamWriter(registerInfoPath, false, Encoding.UTF8))
                     {
